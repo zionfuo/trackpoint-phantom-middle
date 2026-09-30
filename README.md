@@ -103,20 +103,20 @@ here is to not read the TrackPoint at all, which kills the red dot too.
 Short version: on this unit the TrackPoint's middle-button bit carries no usable
 information, so there is nothing to key a filter on. Measured with byte-level
 tracing (`i8042.debug=1`; TrackPoint bytes are never masked, so no keystrokes
-are exposed):
+are exposed). The raw capture and the script that slices it are in
+[`evidence/`](evidence/README.md) — check the numbers rather than take them:
 
-- Pushing the red dot for **11.8 s** produced **621 packets, all 621 with the
-  middle-button bit set** — across a whole range of movement, the bit never
-  cleared once.
-- The only packets anywhere in the run with that bit clear were **13 packets,
-  every one of them adjacent to a keystroke** — that is the phantom, not the
-  button.
-- No press → release → press triple appeared outside a keystroke window.
-- Pressing the button **at rest**, stick untouched, produced **nothing at all**.
-  The controller was held under trace for 100 s while roughly eight presses and
-  long holds were performed: the first 95.5 s are completely silent, and the
-  only traffic in the entire window is the phantom belonging to six keystrokes
-  typed afterwards.
+- Pushing the red dot for **10.5 s** produced **948 packets, every one of them
+  with the middle-button bit set** — across a whole range of movement, the bit
+  never cleared once. (An earlier run saw the same across 621 packets.)
+- Pressing the button **at rest**, stick untouched, produced **nothing at all**:
+  five presses sit inside **49.5 s of complete silence**. An earlier run put
+  roughly eight presses and long holds inside 95.5 s of silence. If the button
+  reached the report, each press would be its own small segment — a press packet
+  and a release packet, no movement, no keystrokes nearby. No such segment
+  exists in either run.
+- The only packets with that bit clear are the **12 of 24** in the typing
+  segment, one per keystroke — that is the phantom, not the button.
 
 So the bit is not the button. It is asserted by *movement*, and a press at rest
 does not generate a packet at all:
