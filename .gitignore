@@ -1,0 +1,12 @@
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+
+# Editors / OS
+*.swp
+*~
+.DS_Store
+
+# Local scratch
+/tmp/
+*.local

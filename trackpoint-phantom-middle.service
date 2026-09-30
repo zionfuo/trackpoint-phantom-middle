@@ -1,0 +1,25 @@
+[Unit]
+Description=Filter phantom TrackPoint middle-click (keep motion, drop BTN_MIDDLE)
+Documentation=https://github.com/Jok0ne/zo-reddot
+After=multi-user.target systemd-udev-settle.service
+
+[Service]
+Type=simple
+# The name of the input device to take over. install.sh rewrites this line
+# with whatever it autodetected on your machine; edit it by hand if you move
+# the unit around.
+#
+# The quotes are NOT optional. systemd splits an unquoted Environment= value on
+# whitespace, so `Environment=TRACKPOINT_NAME=TPPS/2 Elan TrackPoint` silently
+# becomes TRACKPOINT_NAME=TPPS/2 (upstream's README example has this bug) and
+# the daemon never matches its device, restart-looping every 2 seconds.
+Environment="TRACKPOINT_NAME=TPPS/2 Elan TrackPoint"
+Environment=DROP_KEYS=BTN_MIDDLE
+ExecStart=/usr/bin/python3 /usr/local/bin/trackpoint-phantom-middle.py
+Restart=on-failure
+RestartSec=2
+# EVIOCGRAB + /dev/uinput need root; input group is kept for good measure.
+SupplementaryGroups=input
+
+[Install]
+WantedBy=multi-user.target
