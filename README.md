@@ -124,6 +124,14 @@ does not generate a packet at all:
 **the physical button is not wired to the report.** The bit belongs to the
 firmware — held at 1, toggled to 0 and back only while it synthesises a phantom.
 
+Nor is this a firmware bug waiting for a patch. This unit shipped on a 2021 BIOS
+(1.17) with EC 0.1.10; we updated to Lenovo's newest release — **BIOS N2WET52W
+1.42** (2026) and **EC 0.1.15** — via `fwupdmgr`, rebooted, and ran the same
+byte-level capture again. Nothing changed: the bit still set through all of the
+movement, the at-rest press window still completely silent, the phantom pairs
+still one per keystroke. A five-year firmware gap makes no difference, which is
+exactly what you would expect if the button is not wired to the report at all.
+
 That is why dropping `BTN_MIDDLE` is not a policy choice a cleverer filter could
 improve on. There is no signal to key on. Not for *hold it and push the stick to
 scroll* — the gesture a middle button actually exists for — and not for a plain

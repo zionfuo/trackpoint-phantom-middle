@@ -55,6 +55,11 @@ synthesises a phantom packet. The physical button is not wired to it. That is
 why `BTN_MIDDLE` is dropped rather than filtered cleverly — there is no signal
 there to key on.
 
+Two later runs, not included here, repeat every part of this: a 621-packet
+movement run (bit set 621/621), and a run made *after* updating the firmware to
+BIOS 1.42 / EC 0.1.15 (see the main README) — same movement, same silence at
+rest, same phantom pairing.
+
 ## Verify it yourself
 
 ```bash
