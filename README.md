@@ -8,8 +8,9 @@ TrackPoint (red dot) fully working, and drop the one phantom event that causes i
 > **Built for, and verified on: Ubuntu 26.04 + ThinkPad X1 Carbon Gen 8**
 > (20UASDGA00, kernel 7.0.0-34).
 >
-> The underlying cause — i8042 byte crosstalk — is not specific to this model or
-> this release, so other ThinkPads and other distros can hit the same thing. But
+> The underlying cause sits in the embedded controller, below Linux, and is not
+> specific to this model or this release, so other ThinkPads and other distros
+> can hit the same thing. But
 > that combination is what this was developed against, and the one it is known
 > to work on. See [Is this your bug?](#the-root-cause) before assuming it
 > applies to you.
@@ -23,9 +24,9 @@ like Backspace/Tab can stick.
 ## The root cause
 
 The keyboard (`i8042 KBD`, `serio0`) and the TrackPoint (`i8042 AUX`, `serio1`,
-here a `TPPS/2 Elan TrackPoint`) **share one i8042 controller**. On these units
-the bytes crosstalk, and the TrackPoint's `BTN_MIDDLE` ends up an inverted
-**mirror image of the keyboard event stream**:
+here a `TPPS/2 Elan TrackPoint`) **share one i8042 controller**, and the
+TrackPoint's `BTN_MIDDLE` ends up an inverted **mirror image of the keyboard
+event stream**:
 
 | You do | TrackPoint reports |
 |---|---|
@@ -34,6 +35,30 @@ the bytes crosstalk, and the TrackPoint's `BTN_MIDDLE` ends up an inverted
 
 It never settles, and each phantom press is a middle click — which on Linux
 pastes the primary selection. Hence: typing pastes.
+
+### Where it actually comes from
+
+The obvious guess — and the one this README used to make — is that the shared
+controller is mixing up the two ports. It is not. The i8042 is a faithful
+courier here.
+
+Turn on byte-level tracing and type:
+
+```bash
+echo 1 | sudo tee /sys/module/i8042/parameters/debug
+sudo dmesg -w
+```
+
+Keyboard bytes arrive only as `(interrupt, 0, 1)` and TrackPoint bytes only as
+`(interrupt, 1, 12)`, in strictly framed 3-byte packets, with **not one byte
+delivered to the wrong port**. What shows up on the AUX port is a perfectly
+well-formed mouse packet that nobody asked for: a phantom press/release pair
+riding along with every keystroke.
+
+So the packet is synthesised **below the kernel**, by the EC/TrackPoint firmware.
+That is why no kernel-side or driver-side workaround has ever helped, and why
+changing kernel version or flavour cannot fix it — the defect sits upstream of
+everything Linux controls.
 
 You can confirm the signature yourself, without installing anything:
 
@@ -62,11 +87,46 @@ is held exclusively by the daemon.
 ### The trade-off, stated plainly
 
 The phantom middle-click and a *real* middle-button press are the same event
-code on the same device. They cannot be told apart, so `BTN_MIDDLE` is dropped
-wholesale: **the physical middle button stops working — no paste, no scroll.**
-That is the price of a working red dot. If you would rather keep the middle
-button, the only alternative that worked here is to not read the TrackPoint at
-all, which kills the red dot too.
+code on the same device, so `BTN_MIDDLE` is dropped wholesale: **the physical
+middle button stops working — no paste, no scroll.** That is the price of a
+working red dot.
+
+It is worth being clear that this is not a limitation of the filter that a
+cleverer one could improve on. The hardware does not encode the button in a
+recoverable way to begin with — see
+[The middle button is gone for good](#the-middle-button-is-gone-for-good).
+
+If you would rather keep the middle button, the only alternative that worked
+here is to not read the TrackPoint at all, which kills the red dot too.
+
+### The middle button is gone for good
+
+Short version: on this unit the TrackPoint's middle-button bit carries no usable
+information, so there is nothing to key a filter on. Measured with byte-level
+tracing (`i8042.debug=1`; TrackPoint bytes are never masked, so no keystrokes
+are exposed):
+
+- Pushing the red dot for **11.8 s** produced **621 packets, all 621 with the
+  middle-button bit set** — across a whole range of movement, the bit never
+  cleared once.
+- The only packets anywhere in the run with that bit clear were **13 packets,
+  every one of them adjacent to a keystroke** — that is the phantom, not the
+  button.
+- No press → release → press triple appeared outside a keystroke window.
+
+So the bit is asserted by *movement itself*. A genuine press (bit = 1) and "the
+stick is moving" (bit = 1) are literally the same bytes; there is no
+discriminator because there is no difference. Dropping `BTN_MIDDLE` is not a
+policy choice — it is the only correct reading of a signal that is not there.
+
+The gesture people actually want a middle button for is *hold it and push the
+stick to scroll*. That is movement, so it is covered by the paragraph above.
+Gone.
+
+*(One honest gap: the cleanest possible test — press the button while not
+touching the stick — has not yet been captured cleanly, because every captured
+run had movement in every packet. It could only add a marginal at-rest case;
+hold-to-scroll, the main use, is already ruled out.)*
 
 ### Why the usual advice does not work
 
@@ -153,8 +213,9 @@ files. (It also cleans up `reddot-filter.*`, this project's former name.)
 
 ## What this does *not* fix
 
-The i8042/EC byte crosstalk itself is untouched. Only the middle-click symptom
-is filtered out. On the machine this was developed against, two others remain:
+The EC firmware's phantom packet generation is untouched — it is below Linux and
+cannot be patched from here. Only the middle-click symptom is filtered out. On
+the machine this was developed against, two others remain:
 
 - Backspace / Tab / T / Y / `[` / `]` / C / B can stick in the pressed state
   (visible as a terminal spewing `hhhh` or re-pasting text);
