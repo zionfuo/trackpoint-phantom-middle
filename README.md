@@ -92,9 +92,8 @@ middle button stops working — no paste, no scroll.** That is the price of a
 working red dot.
 
 It is worth being clear that this is not a limitation of the filter that a
-cleverer one could improve on. The hardware does not encode the button in a
-recoverable way to begin with — see
-[The middle button is gone for good](#the-middle-button-is-gone-for-good).
+cleverer one could improve on. The hardware does not report this button at all —
+see [The middle button is gone for good](#the-middle-button-is-gone-for-good).
 
 If you would rather keep the middle button, the only alternative that worked
 here is to not read the TrackPoint at all, which kills the red dot too.
@@ -113,20 +112,22 @@ are exposed):
   every one of them adjacent to a keystroke** — that is the phantom, not the
   button.
 - No press → release → press triple appeared outside a keystroke window.
+- Pressing the button **at rest**, stick untouched, produced **nothing at all**.
+  The controller was held under trace for 100 s while roughly eight presses and
+  long holds were performed: the first 95.5 s are completely silent, and the
+  only traffic in the entire window is the phantom belonging to six keystrokes
+  typed afterwards.
 
-So the bit is asserted by *movement itself*. A genuine press (bit = 1) and "the
-stick is moving" (bit = 1) are literally the same bytes; there is no
-discriminator because there is no difference. Dropping `BTN_MIDDLE` is not a
-policy choice — it is the only correct reading of a signal that is not there.
+So the bit is not the button. It is asserted by *movement*, and a press at rest
+does not generate a packet at all:
 
-The gesture people actually want a middle button for is *hold it and push the
-stick to scroll*. That is movement, so it is covered by the paragraph above.
-Gone.
+**the physical button is not wired to the report.** The bit belongs to the
+firmware — held at 1, toggled to 0 and back only while it synthesises a phantom.
 
-*(One honest gap: the cleanest possible test — press the button while not
-touching the stick — has not yet been captured cleanly, because every captured
-run had movement in every packet. It could only add a marginal at-rest case;
-hold-to-scroll, the main use, is already ruled out.)*
+That is why dropping `BTN_MIDDLE` is not a policy choice a cleverer filter could
+improve on. There is no signal to key on. Not for *hold it and push the stick to
+scroll* — the gesture a middle button actually exists for — and not for a plain
+at-rest click either.
 
 ### Why the usual advice does not work
 
