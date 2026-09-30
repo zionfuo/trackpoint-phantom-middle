@@ -1,5 +1,7 @@
 [Unit]
 Description=Filter phantom TrackPoint middle-click (keep motion, drop BTN_MIDDLE)
+Documentation=https://github.com/zionfuo/trackpoint-phantom-middle
+# Upstream credit — the grab+uinput mechanism this project is derived from.
 Documentation=https://github.com/Jok0ne/zo-reddot
 After=multi-user.target systemd-udev-settle.service
 
