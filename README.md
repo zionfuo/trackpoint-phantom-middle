@@ -160,21 +160,51 @@ cd trackpoint-phantom-middle
 ./install.sh
 ```
 
-`install.sh` needs `sudo`. It autodetects your TrackPoint's device name, installs
-`python3-evdev`, renders the systemd unit and starts the service. If autodetection
-fails, pass the name explicitly:
+`install.sh` needs `sudo`. It installs `python3-evdev`, asks the daemon which
+device it would take over, renders the systemd unit with that identity, and
+starts the service.
+
+### Which device gets claimed
+
+Matching is by **exact identity**, not by a heuristic, because the obvious
+heuristics do not work here. A capability test — relative axes, a left button, no
+absolute axes — is passed by the touchpad's RMI4 companion `"Mouse"` node as well
+as by the TrackPoint, *and* by this project's own synthetic node. So capabilities
+narrow the field, and an exact identifier settles it:
+
+| Setting | Meaning |
+|---|---|
+| `TRACKPOINT_PHYS` | exact `phys`, e.g. `isa0060/serio1/input0`. The stronger claim — unique per port |
+| `TRACKPOINT_NAME` | exact device name, e.g. `TPPS/2 Elan TrackPoint` |
+
+`install.sh` writes both from what it detects. To see what it would pick, and
+what it rejected and why:
 
 ```bash
+./install.sh detect
+```
+
+If nothing matches, the daemon **waits and logs every input device it can see**
+rather than guessing. If two devices match, it refuses outright. That is
+deliberate: grabbing the wrong node disables a working touchpad and leaves the
+paste bug in place, which is worse than doing nothing. Override either value if
+your machine differs:
+
+```bash
+TRACKPOINT_PHYS='the phys value from ./install.sh detect' ./install.sh
 TRACKPOINT_NAME='TPPS/2 IBM TrackPoint' ./install.sh
 ```
 
-The current name on this machine, for reference:
+The identity on this machine, for reference:
 
 ```
 N: Name="TPPS/2 Elan TrackPoint"
 P: Phys=isa0060/serio1/input0
-H: Handlers=mouse3 event9
+H: Handlers=mouse2 event6
 ```
+
+Note the port: `serio1` is the AUX channel, never `serio0`, which is the
+keyboard.
 
 ## Verify
 
@@ -196,17 +226,31 @@ you cannot distinguish "fixed" from "not happening right now".
 
 ## Troubleshooting
 
-- **Nothing happens / log says "waiting for ... to appear".** The device name in
-  the unit does not match your hardware. Find the real name with
-  `cat /proc/bus/input/devices`, then either re-run `install.sh` with
-  `TRACKPOINT_NAME=...` or edit `Environment="TRACKPOINT_NAME=..."` in
-  `/etc/systemd/system/trackpoint-phantom-middle.service` and
-  `systemctl daemon-reload && systemctl restart trackpoint-phantom-middle`.
-  The daemon polls for the device instead of exiting, so boot order, suspend and
-  i8042 re-probe all recover on their own.
+- **`waiting for the TrackPoint: no device matched (...)`** — the identity in the
+  unit does not match your hardware. That line is followed by every input device
+  the daemon can see, each with its phys and what the daemon makes of it. Copy the
+  right phys into `TRACKPOINT_PHYS`, easiest via `./install.sh detect` and a
+  re-run of `install.sh`. The daemon polls instead of exiting, so boot order,
+  suspend and i8042 re-probe all recover on their own.
+- **`... refusing to guess`** — more than one device matched, so the daemon
+  deliberately did nothing. The message lists the candidates; choose one for
+  `TRACKPOINT_PHYS`. This is the fail-safe working, not a malfunction.
+- **`could not take over /dev/input/eventN (... Device or resource busy)`** —
+  something else already holds the EVIOCGRAB: another copy of this daemon, an
+  older install, or a tool like `evtest --grab`. The daemon backs off and retries
+  instead of spinning; find the holder with `sudo fuser -v /dev/input/eventN`.
 - **The quotes in `Environment=` are required.** systemd splits an unquoted value
   on whitespace: `Environment=TRACKPOINT_NAME=TPPS/2 Elan TrackPoint` silently
   becomes `TPPS/2`. The daemon then never matches and restart-loops.
+- **`SYN_DROPPED: resynced ...`** — the kernel's event buffer overflowed under
+  load and the daemon repaired the button state from the kernel's own view.
+  Occasional is normal; constant means something else is starving the input loop.
+- **`./install.sh observe` shows a device but no events.** An `EVIOCGRAB` is
+  exclusive: while the daemon holds the TrackPoint, nobody else receives its
+  events. Stop the service first
+  (`sudo systemctl stop trackpoint-phantom-middle`), observe, then start it
+  again. This looks like a silent failure because *opening* the node still
+  succeeds — it is the events that are routed away.
 - **Filing a bug?** Run `./install.sh diagnose` (or `sudo ./diagnose.sh`) and
   paste the output.
 

@@ -3,21 +3,36 @@ Description=Filter phantom TrackPoint middle-click (keep motion, drop BTN_MIDDLE
 Documentation=https://github.com/zionfuo/trackpoint-phantom-middle
 # Upstream credit — the grab+uinput mechanism this project is derived from.
 Documentation=https://github.com/Jok0ne/zo-reddot
-After=multi-user.target systemd-udev-settle.service
+# Ordering is not needed for correctness: the daemon polls for its device, so it
+# is happy to start before the input stack is up. (systemd-udev-settle.service
+# used to be listed here; it is deprecated for boot ordering and guarantees
+# nothing this daemon relies on.)
+After=multi-user.target
+# Never give up on restarting. The default is 5 starts per 10s, which
+# RestartSec=2 reaches in exactly 8s — so a *persistent* failure (another
+# program holding the EVIOCGRAB, say) would leave the unit failed permanently
+# with the phantom paste quietly back. These are [Unit] keys, not [Service].
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-# The name of the input device to take over. install.sh rewrites this line
-# with whatever it autodetected on your machine; edit it by hand if you move
-# the unit around.
+# The device to take over. install.sh rewrites both of these with whatever it
+# autodetected on your machine; edit them by hand if you move the unit around.
+# PHYS is checked first and is the stronger claim — it is unique per port, while
+# a name can collide with another pointing device. They are meant to be set
+# together: PHYS for identity, NAME so the journal is readable.
 #
 # The quotes are NOT optional. systemd splits an unquoted Environment= value on
 # whitespace, so `Environment=TRACKPOINT_NAME=TPPS/2 Elan TrackPoint` silently
 # becomes TRACKPOINT_NAME=TPPS/2 (upstream's README example has this bug) and
 # the daemon never matches its device, restart-looping every 2 seconds.
+Environment="TRACKPOINT_PHYS=isa0060/serio1/input0"
 Environment="TRACKPOINT_NAME=TPPS/2 Elan TrackPoint"
 Environment=DROP_KEYS=BTN_MIDDLE
 ExecStart=/usr/bin/python3 /usr/local/bin/trackpoint-phantom-middle.py
+# run() only returns non-zero for something the supervisor could not handle
+# itself, so this is a genuine last resort rather than the normal path: device
+# loss and a missing device are both retried in-process, with backoff.
 Restart=on-failure
 RestartSec=2
 # EVIOCGRAB + /dev/uinput need root; input group is kept for good measure.

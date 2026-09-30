@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — install / observe / diagnose / uninstall trackpoint-phantom-middle
+# install.sh — install / observe / detect / diagnose / uninstall trackpoint-phantom-middle
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,22 +8,27 @@ SCRIPT_DST="/usr/local/bin/$PROG.py"
 UNIT_DST="/etc/systemd/system/$PROG.service"
 
 # The previous name of this project. Installing removes it, so nobody ends up
-# with two daemons racing for the same EVIOCGRAB (the loser just restart-loops).
+# with two daemons racing for the same EVIOCGRAB.
 LEGACY_PROG=reddot-filter
 LEGACY_SCRIPT_DST="/usr/local/bin/$LEGACY_PROG.py"
 LEGACY_UNIT_DST="/etc/systemd/system/$LEGACY_PROG.service"
 
+# Written into the unit when autodetection finds nothing. That is the normal
+# state on a fresh boot before the input stack is up, so it is a soft failure.
+FALLBACK_PHYS="isa0060/serio1/input0"
 FALLBACK_NAME="TPPS/2 Elan TrackPoint"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [install|observe|diagnose|status|uninstall]
+Usage: $(basename "$0") [install|observe|detect|diagnose|status|uninstall]
 
 install    Autodetect the TrackPoint, install python3-evdev, render and copy
            the unit + script, enable and start the service. Requires sudo.
            Default action.
 observe    Run the script read-only in the foreground (no grab) so you can
            watch the raw BTN_MIDDLE stream while typing. Requires sudo.
+detect     Print the device the daemon would claim, and every other input
+           device it considered. Requires sudo.
 diagnose   Print everything worth pasting into a bug report (read-only).
 status     Show service state and the recent drop log.
 uninstall  Stop the service, remove the files. Original behaviour returns
@@ -49,38 +54,26 @@ require_evdev() {
   fi
 }
 
-# Echo the name of the first TrackPoint-ish input device, or nothing.
+# Echo "phys<TAB>name" for the device to claim, or nothing.
+#
+# This deliberately shells out to the daemon's own --detect instead of scanning
+# /dev/input itself. The installer and the daemon have to agree on which node is
+# the TrackPoint — if they disagree, the installer pins one device and the
+# daemon watches another, and nothing says so. Running the same code is the only
+# way to guarantee they cannot drift apart.
 # Reading /dev/input/event* needs root or the input group, hence sudo.
 detect_trackpoint() {
-  local name
-  name="$(sudo python3 - <<'PY'
-import glob
-from evdev import InputDevice
+  local out phys name
+  out="$(sudo python3 "$REPO_DIR/$PROG.py" --detect)" || return 1
+  phys="$(printf '%s\n' "$out" | sed -n 's/^phys=//p')"
+  name="$(printf '%s\n' "$out" | sed -n 's/^name=//p')"
+  [ -n "$phys" ] || return 1
+  printf '%s\t%s' "$phys" "$name"
+}
 
-cands = []
-for path in sorted(glob.glob("/dev/input/event*")):
-    try:
-        dev = InputDevice(path)
-    except Exception:
-        continue
-    if "trackpoint" not in dev.name.lower():
-        continue
-    # Skip our own synthetic node. It is named "TrackPoint Middle Filtered", so
-    # on a re-install — or any time an older copy of this daemon is still
-    # running — it matches the name test and, sorting before the real device,
-    # would otherwise win the match and get written into the unit file.
-    if "uinput" in (dev.phys or "").lower():
-        continue
-    cands.append(dev)
-
-# Prefer a real PS/2 device over anything else that merely mentions TrackPoint.
-cands.sort(key=lambda d: (0 if (d.phys or "").startswith("isa") else 1, d.path))
-if cands:
-    print(cands[0].name)
-PY
-  )" || return 1
-  [ -n "$name" ] || return 1
-  printf '%s' "$name"
+# Escape a value for use on the replacement side of a sed s||| command.
+sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[&\\|]/\\&/g'
 }
 
 remove_legacy() {
@@ -102,33 +95,52 @@ case "${1:-install}" in
 
     # Take down any older copy *before* autodetecting: a running one holds an
     # EVIOCGRAB on the real device and presents its own synthetic replacement,
-    # which would otherwise be what gets detected.
+    # which would otherwise be what gets detected. (The daemon also refuses to
+    # grab its own output, but the detection would still be misled.)
     remove_legacy
 
+    phys="${TRACKPOINT_PHYS:-}"
     name="${TRACKPOINT_NAME:-}"
-    if [ -z "$name" ]; then
-      name="$(detect_trackpoint || true)"
+    if [ -z "$phys" ] && [ -z "$name" ]; then
+      detected="$(detect_trackpoint || true)"
+      if [ -n "$detected" ]; then
+        phys="${detected%%$'\t'*}"
+        name="${detected#*$'\t'}"
+      fi
     fi
-    if [ -n "$name" ]; then
-      echo "Detected TrackPoint: $name"
+
+    if [ -n "$phys" ]; then
+      echo "Detected TrackPoint: $name ($phys)"
+    elif [ -n "$name" ]; then
+      echo "Using TRACKPOINT_NAME=$name (no phys pinned; matching by name)"
     else
+      phys="$FALLBACK_PHYS"
       name="$FALLBACK_NAME"
       cat >&2 <<EOF
-!! No TrackPoint-like device found; falling back to '$name'.
+!! No TrackPoint-like device found; falling back to '$name' ($phys).
    That is fine at install time if the device is not up yet — the daemon polls
-   for it — but if your machine calls it something else, re-run as:
+   for it, and logs what it does find. If your machine calls it something else,
+   re-run with one of:
+     TRACKPOINT_PHYS='the phys value from ./install.sh detect' ./install.sh
      TRACKPOINT_NAME='Your Device Name' ./install.sh
 EOF
     fi
 
     echo "=== Installing files ==="
-    # Render the unit with the detected name. The value is always quoted for
-    # the reason spelled out in the unit file: an unquoted Environment= value
+    # Render the unit with the detected identity. Both values are always quoted,
+    # for the reason spelled out in the unit file: an unquoted Environment= value
     # is split on whitespace and 'TPPS/2 Elan TrackPoint' becomes 'TPPS/2'.
+    # An empty phys is fine — the daemon reads that as unset and falls back to
+    # matching on the name.
     unit_tmp="$(mktemp)"
     trap 'rm -f "$unit_tmp"' EXIT
-    sed "s|^Environment=\"TRACKPOINT_NAME=.*\"\$|Environment=\"TRACKPOINT_NAME=$name\"|" \
+    sed -e "s|^Environment=\"TRACKPOINT_PHYS=.*\"\$|Environment=\"TRACKPOINT_PHYS=$(sed_replacement "$phys")\"|" \
+        -e "s|^Environment=\"TRACKPOINT_NAME=.*\"\$|Environment=\"TRACKPOINT_NAME=$(sed_replacement "$name")\"|" \
       "$REPO_DIR/$PROG.service" > "$unit_tmp"
+    if ! grep -q "^Environment=\"TRACKPOINT_PHYS=$phys\"\$" "$unit_tmp"; then
+      echo "Internal error: failed to render TRACKPOINT_PHYS into the unit." >&2
+      exit 1
+    fi
     if ! grep -q "^Environment=\"TRACKPOINT_NAME=$name\"\$" "$unit_tmp"; then
       echo "Internal error: failed to render TRACKPOINT_NAME into the unit." >&2
       exit 1
@@ -138,7 +150,11 @@ EOF
     sudo install -m 0644 "$unit_tmp" "$UNIT_DST"
     echo "=== Enabling service ==="
     sudo systemctl daemon-reload
-    sudo systemctl enable --now "$PROG.service"
+    sudo systemctl enable "$PROG.service"
+    # Restart, not `enable --now`: start is a no-op on an already-active unit, so
+    # upgrading an existing install would leave the OLD code running until the
+    # next reboot, while the log and the file on disk both said otherwise.
+    sudo systemctl restart "$PROG.service"
     sleep 1
     sudo systemctl status "$PROG.service" --no-pager | head -8 || true
 
@@ -148,6 +164,7 @@ Installed. The red dot still moves the cursor and left/right click still work;
 BTN_MIDDLE is dropped, so typing no longer pastes.
 
 Verify:   ./install.sh status
+Check:    ./install.sh detect      (what the daemon claims, and what it rejected)
 Watch:    journalctl -u trackpoint-phantom-middle -f   (type, watch the drops)
 Rollback: ./install.sh uninstall
 DONE
@@ -156,9 +173,19 @@ DONE
   observe)
     require_evdev
     trap 'echo; echo "stopped."' EXIT
-    sudo TRACKPOINT_NAME="${TRACKPOINT_NAME:-$FALLBACK_NAME}" \
+    # Pass the overrides through if the caller set them; otherwise stay out of
+    # the way and let the daemon autodetect with its own matcher.
+    sudo TRACKPOINT_PHYS="${TRACKPOINT_PHYS:-}" \
+         TRACKPOINT_NAME="${TRACKPOINT_NAME:-}" \
          MODE=observe \
          python3 "$REPO_DIR/$PROG.py"
+    ;;
+
+  detect)
+    require_evdev
+    sudo TRACKPOINT_PHYS="${TRACKPOINT_PHYS:-}" \
+         TRACKPOINT_NAME="${TRACKPOINT_NAME:-}" \
+         python3 "$REPO_DIR/$PROG.py" --detect
     ;;
 
   diagnose)

@@ -131,20 +131,45 @@ cd trackpoint-phantom-middle
 ./install.sh
 ```
 
-`install.sh` 需要 `sudo`。它会自动探测你机器上 TrackPoint 的设备名、装
-`python3-evdev`、渲染 systemd unit 并启动服务。探测失败时手动指定：
+`install.sh` 需要 `sudo`。它会装 `python3-evdev`、问守护进程"你打算接管哪个设备"、
+用那个身份渲染 systemd unit，然后启动服务。
+
+### 认哪个设备
+
+匹配用的是**精确身份**，不是启发式——因为那几种启发式在这里都不成立。一个能力判据
+（有相对轴、有左键、没有绝对轴）不仅 TrackPoint 满足，触控板的 RMI4 伴生 `"Mouse"`
+节点也满足，**本项目自己合成的那个节点同样满足**。所以能力只用来缩小范围，真正定身份
+的还是精确标识：
+
+| 变量 | 含义 |
+|---|---|
+| `TRACKPOINT_PHYS` | 精确 `phys`，例如 `isa0060/serio1/input0`。更强的主张，端口唯一 |
+| `TRACKPOINT_NAME` | 精确设备名，例如 `TPPS/2 Elan TrackPoint` |
+
+`install.sh` 会把探测到的两个值都写进 unit。想看它打算选谁、又否决了谁、为什么：
 
 ```bash
+./install.sh detect
+```
+
+一个都匹配不上时，守护进程**不猜**——它会等着，并把能看到的每个输入设备都打进日志。
+匹配到两个以上时，它直接**拒绝**。这是刻意的：抓错节点的代价是把一块本来好用的触控板
+搞坏、同时粘贴的毛病还在，那比什么都不做更糟。机器不同就手动覆盖：
+
+```bash
+TRACKPOINT_PHYS='./install.sh detect 输出里的 phys 值' ./install.sh
 TRACKPOINT_NAME='TPPS/2 IBM TrackPoint' ./install.sh
 ```
 
-本机当前的设备名，供参考：
+本机的身份，供参考：
 
 ```
 N: Name="TPPS/2 Elan TrackPoint"
 P: Phys=isa0060/serio1/input0
-H: Handlers=mouse3 event9
+H: Handlers=mouse2 event6
 ```
+
+注意端口：`serio1` 是 AUX 通道，绝不是 `serio0`——那是键盘。
 
 ## 验证
 
@@ -166,17 +191,25 @@ journalctl -u trackpoint-phantom-middle -f
 
 ## 排错
 
-- **没反应 / 日志说 "waiting for ... to appear"。** unit 里的设备名和你的硬件对不上。
-  用 `cat /proc/bus/input/devices` 找真名，然后要么带 `TRACKPOINT_NAME=...` 重跑
-  `install.sh`，要么直接改
-  `/etc/systemd/system/trackpoint-phantom-middle.service` 里的
-  `Environment="TRACKPOINT_NAME=..."`，再
-  `systemctl daemon-reload && systemctl restart trackpoint-phantom-middle`。
-  守护进程是**轮询等设备**而不是退出，所以开机顺序、suspend/resume、i8042 重新探测
-  都能自愈。
+- **日志说 `waiting for the TrackPoint: no device matched (...)`。** unit 里的身份和你的
+  硬件对不上。这行后面会跟着守护进程能看到的每个输入设备，各自带 phys 和它的判断。把对
+  的 phys 填进 `TRACKPOINT_PHYS`——最省事的做法是 `./install.sh detect` 看一眼再重跑
+  `install.sh`。守护进程是**轮询等设备**而不是退出，所以开机顺序、suspend/resume、
+  i8042 重新探测都能自愈。
+- **`... refusing to guess`。** 匹配到了不止一个设备，于是守护进程**故意什么都没做**。
+  消息里会列出候选，挑一个填进 `TRACKPOINT_PHYS`。这是兜底逻辑在正常工作，不是故障。
+- **`could not take over /dev/input/eventN (... Device or resource busy)`。** 已经有别的
+  东西拿着 EVIOCGRAB 了：另一份本守护进程、旧的安装残留，或者 `evtest --grab` 这类工具。
+  守护进程会退避重试而不是空转；用 `sudo fuser -v /dev/input/eventN` 找持有者。
 - **`Environment=` 的引号是必需的。** systemd 会按空白切分不加引号的值：
   `Environment=TRACKPOINT_NAME=TPPS/2 Elan TrackPoint` 会静默变成 `TPPS/2`，于是
   永远匹配不上设备，服务每 2 秒重启一次。
+- **`SYN_DROPPED: resynced ...`。** 高负载下内核的事件缓冲区溢出，守护进程按内核自己的
+  视角把按键状态修回来了。偶发正常；一直出现说明有东西在饿死输入循环。
+- **`./install.sh observe` 找得到设备却一个事件都收不到。** `EVIOCGRAB` 是独占的：守护
+  进程拿着 TrackPoint 的时候，别的读者收不到它的事件。先
+  `sudo systemctl stop trackpoint-phantom-middle`，观察完再启动。这一条之所以看起来像
+  "静默失败"，是因为**打开**设备节点仍然会成功——被截走的是事件。
 - **要报 bug？** 跑 `./install.sh diagnose`（或 `sudo ./diagnose.sh`），把输出贴出来。
 
 ## 卸载
