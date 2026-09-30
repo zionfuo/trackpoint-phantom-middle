@@ -5,6 +5,15 @@ TrackPoint (red dot) fully working, and drop the one phantom event that causes i
 
 *[中文说明 →](README.zh-CN.md)*
 
+> **Built for, and verified on: Ubuntu 26.04 + ThinkPad X1 Carbon Gen 8**
+> (20UASDGA00, kernel 7.0.0-34).
+>
+> The underlying cause — i8042 byte crosstalk — is not specific to this model or
+> this release, so other ThinkPads and other distros can hit the same thing. But
+> that combination is what this was developed against, and the one it is known
+> to work on. See [Is this your bug?](#the-root-cause) before assuming it
+> applies to you.
+
 ## The symptom
 
 On affected ThinkPads, typing in a terminal pastes the primary selection. Type
